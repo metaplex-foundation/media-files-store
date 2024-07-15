@@ -1,0 +1,22 @@
+[http_server]
+enabled = true
+port = 8080
+
+[obj_storage]
+endpoint = "http://127.0.0.1:9000"
+region = "us-east-1"
+access_key_id = "admin"
+secret_access_key = "password"
+bucket_for_media = "rollup-media-assets"
+
+[images]
+resize_to = 400
+
+[das]
+enabled = true
+grpc_address = "http://127.0.0.1:9091"
+fetch_batch_size = 100
+number_of_workers = 10
+
+[metrics]
+enabled = false
