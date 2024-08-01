@@ -16,7 +16,7 @@ struct EndpointSharedData {
 }
 
 /// Creates an HTTP server that provides asset previews to clients
-pub async fn run_img_server(http_config: &HttpServer, media_storage_client: Arc<MediaStorageClient>) -> anyhow::Result<()> {
+pub async fn run_img_server(cfg: &HttpServer, media_storage_client: Arc<MediaStorageClient>) -> anyhow::Result<()> {
 
     let state = EndpointSharedData { media_storage_client };
 
@@ -25,7 +25,7 @@ pub async fn run_img_server(http_config: &HttpServer, media_storage_client: Arc<
         .route("/asset/:id", get(get_asset))
         .with_state(state);
 
-    let port = http_config.port;
+    let port = cfg.port;
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 
@@ -47,7 +47,7 @@ async fn get_asset(
     Path(id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
     state: State<EndpointSharedData>
-) -> impl IntoResponse {
+) -> Result<Resp, StatusCode> {
     let size_op = params.get("size")
         .and_then(|s|s.parse::<u32>().ok())
         .filter(|&s| s < IMG_MAX_SIZE);
@@ -58,37 +58,29 @@ async fn get_asset(
                 Some(size) => {
                     let bytes = byte_stream.collect().await.unwrap().into_bytes(); // fail on S3 error
                     match image_resize::resize_fast(&bytes, size) {
-                        Ok(resized) =>
-                            Response::builder()
-                                .header(CONTENT_TYPE, mime)
-                                .body(Body::from(resized))
-                                .unwrap(),
-                        Err(ImgResizeError::NoResizeNeeded) =>
-                            Response::builder()
-                                .header(CONTENT_TYPE, mime)
-                                .body(Body::from(bytes))
-                                .unwrap(),
-                        Err(_) =>
-                            Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Body::empty())
-                                .unwrap()
+                        Ok(resized)                => Ok(Resp(mime, Body::from(resized))),
+                        Err(ImgResizeError::NoResizeNeeded) => Ok(Resp(mime, Body::from(bytes))),
+                        Err(_)                              => Err(StatusCode::INTERNAL_SERVER_ERROR),
                     }
                 },
                 None => {
                     let asset_stream = ReaderStream::new(byte_stream.into_async_read());
-                    Response::builder()
-                        .header(CONTENT_TYPE, mime)
-                        .body(Body::from_stream(asset_stream))
-                        .unwrap()
+                    Ok(Resp(mime, Body::from_stream(asset_stream)))
                 },
             }
         },
-        Err(_) => {
-            Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::empty())
-                .unwrap()
-        }
+        Err(_) => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+struct Resp(String, Body);
+
+impl IntoResponse for Resp {
+    fn into_response(self) -> Response {
+        let Resp(mime, body) = self;
+        Response::builder()
+            .header(CONTENT_TYPE, mime)
+            .body(body)
+            .unwrap()
     }
 }

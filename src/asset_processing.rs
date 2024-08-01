@@ -1,7 +1,13 @@
 use std::sync::Arc;
-use async_channel::{Receiver, Sender};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use crate::{configs::DasCfg, das_client::{DasClient, DlOutcome, UrlDlResult}, download::download, image_resize, media_type::AssetClass, obj_storage_client::MediaStorageClient, string_util::keccak256_hash_bs58str};
+use crate::{
+    configs::DasCfg,
+    das_client::{DasClient, DlOutcome, UrlDlResult},
+    download::download,
+    image_resize,
+    media_type::AssetClass,
+    obj_storage_client::MediaStorageClient,
+    string_util::keccak256_hash_bs58str
+};
 
 
 pub enum Task {
@@ -33,8 +39,9 @@ pub async fn start_downloading_pipeline(
     media_storage: Arc<MediaStorageClient>,
     cfg: &DasCfg,
 ) {
-    let (resp_sender, resp_recv) = tokio::sync::mpsc::unbounded_channel::<TaskResp>();
-    let (task_sender, task_recv) = async_channel::bounded::<Task>(cfg.number_of_workers * cfg.fetch_batch_size as usize);
+    let tasks_queue_size = cfg.number_of_workers * cfg.fetch_batch_size as usize;
+    let (resp_sender, resp_recv) = tokio::sync::mpsc::channel::<TaskResp>(tasks_queue_size);
+    let (task_sender, task_recv) = async_channel::bounded::<Task>(tasks_queue_size);
 
     for _ in 0 .. cfg.number_of_workers {
         make_worker(task_recv.clone(), resp_sender.clone(), media_storage.clone()).await;    
@@ -46,7 +53,7 @@ pub async fn start_downloading_pipeline(
 
 async fn make_poller(
     das_client: Arc<dyn DasClient + Send + Sync + 'static>,
-    task_sender: Sender<Task>,
+    task_sender: async_channel::Sender<Task>,
     poll_batch_size: u32,
 ) {
     tokio::spawn(async move {
@@ -60,7 +67,7 @@ async fn make_poller(
     });
 }
 
-async fn make_results_sender(das_client: Arc<dyn DasClient + Send + Sync + 'static>, mut resp_recv: UnboundedReceiver<TaskResp>) {
+async fn make_results_sender(das_client: Arc<dyn DasClient + Send + Sync + 'static>, mut resp_recv: tokio::sync::mpsc::Receiver<TaskResp>) {
     tokio::spawn(async move {
         let mut buffer: Vec<UrlDlResult> = Vec::new(); // NFT Id -> meme type
         loop {
@@ -79,8 +86,8 @@ async fn make_results_sender(das_client: Arc<dyn DasClient + Send + Sync + 'stat
 }
 
 async fn make_worker(
-    requests: Receiver<Task>,
-    responses: UnboundedSender<TaskResp>,
+    requests: async_channel::Receiver<Task>,
+    responses: tokio::sync::mpsc::Sender<TaskResp>,
     media_storage: Arc<MediaStorageClient>
 ) {
     tokio::spawn(async move {
@@ -105,7 +112,7 @@ async fn make_worker(
                                     UrlDlResult { url, outcome: err.into() }
                                 },
                             };
-                            match responses.send(TaskResp(asset_download_result)) {
+                            match responses.send(TaskResp(asset_download_result)).await {
                                 Ok(_) => (),
                                 Err(_) => break,
                             }
