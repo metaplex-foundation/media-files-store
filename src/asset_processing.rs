@@ -1,14 +1,16 @@
 use std::sync::Arc;
+
 use crate::{
-    configs::DasCfg,
+    configs::{AssetProcessorCfg, DasCfg},
     das_client::{DasClient, DlOutcome, UrlDlResult},
     download::download,
-    image_resize,
+    image_resize::{self, ImgResizeError},
     media_type::AssetClass,
     obj_storage_client::MediaStorageClient,
     string_util::keccak256_hash_bs58str
 };
 
+const SEND_BACK_BUFFER_SIZE: usize = 100;
 
 pub enum Task {
     /// ID, URL
@@ -37,17 +39,18 @@ pub struct TaskResp(UrlDlResult);
 pub async fn start_downloading_pipeline(
     das_client: Arc<dyn DasClient + Send + Sync + 'static>,
     media_storage: Arc<MediaStorageClient>,
-    cfg: &DasCfg,
+    das_cfg: &DasCfg,
+    asset_cfg: &AssetProcessorCfg,
 ) {
-    let tasks_queue_size = cfg.number_of_workers * cfg.fetch_batch_size as usize;
+    let tasks_queue_size = das_cfg.number_of_workers * das_cfg.fetch_batch_size as usize;
     let (resp_sender, resp_recv) = tokio::sync::mpsc::channel::<TaskResp>(tasks_queue_size);
     let (task_sender, task_recv) = async_channel::bounded::<Task>(tasks_queue_size);
 
-    for _ in 0 .. cfg.number_of_workers {
-        make_worker(task_recv.clone(), resp_sender.clone(), media_storage.clone()).await;    
+    for _ in 0 .. das_cfg.number_of_workers {
+        make_worker(task_recv.clone(), resp_sender.clone(), media_storage.clone(), asset_cfg.clone()).await;    
     }
 
-    make_poller(das_client.clone(), task_sender, cfg.fetch_batch_size).await;
+    make_poller(das_client.clone(), task_sender, das_cfg.fetch_batch_size).await;
     make_results_sender(das_client.clone(),resp_recv).await;
 }
 
@@ -63,18 +66,19 @@ async fn make_poller(
                 task_sender.send(Task::Download { url: asset })
                     .await.unwrap();
             }
+            // TODO: metrics here
         }
     });
 }
 
 async fn make_results_sender(das_client: Arc<dyn DasClient + Send + Sync + 'static>, mut resp_recv: tokio::sync::mpsc::Receiver<TaskResp>) {
     tokio::spawn(async move {
-        let mut buffer: Vec<UrlDlResult> = Vec::new(); // NFT Id -> meme type
+        let mut buffer: Vec<UrlDlResult> = Vec::new(); // NFT Id -> mime type
         loop {
             match resp_recv.recv().await {
                 Some(TaskResp(asset_download_result)) => {
                     buffer.push(asset_download_result);
-                    if buffer.len() >= 100 {
+                    if buffer.len() >= SEND_BACK_BUFFER_SIZE {
                         das_client.notify_finished(buffer).await;
                         buffer = Vec::new();
                     }
@@ -82,13 +86,17 @@ async fn make_results_sender(das_client: Arc<dyn DasClient + Send + Sync + 'stat
                 None => break,
             }
         }
+        if !buffer.is_empty() {
+            das_client.notify_finished(buffer).await;
+        }
     });
 }
 
 async fn make_worker(
     requests: async_channel::Receiver<Task>,
     responses: tokio::sync::mpsc::Sender<TaskResp>,
-    media_storage: Arc<MediaStorageClient>
+    media_storage: Arc<MediaStorageClient>,
+    asset_cfg: AssetProcessorCfg,
 ) {
     tokio::spawn(async move {
         loop {
@@ -97,13 +105,21 @@ async fn make_worker(
                     match msg {
                         Task::Download { url} => {
                             let id = keccak256_hash_bs58str(&url);
-                            let asset_download_result = match download(&url).await {
+                            let asset_download_result = match download(&url, asset_cfg.file_max_size_bytes).await {
                                 Ok((bytes, mime)) => {
                                     if mime.class == AssetClass::Image {
-                                        let preview = image_resize::resize_fast(&bytes, 400).unwrap();
-                                        // TODO-XXX: how to react to MINIO inavailability
-                                        media_storage.save_media(&id, preview.into(),mime.str()).await.unwrap();
-                                        UrlDlResult { url, outcome: DlOutcome::success(mime.str(), 400) }
+                                        match image_resize::resize_fast(&bytes, asset_cfg.resize_to) {
+                                            Ok(resized) => {
+                                                media_storage.save_media(&id, resized.into(),mime.str()).await.unwrap();
+                                                UrlDlResult { url, outcome: DlOutcome::success(mime.str(), asset_cfg.resize_to) }
+                                            },
+                                            Err(ImgResizeError::NoResizeNeeded) => {
+                                                media_storage.save_media(&id, bytes.into(),mime.str()).await.unwrap();
+                                                UrlDlResult { url, outcome: DlOutcome::success(mime.str(), asset_cfg.resize_to) }       
+                                            },
+                                            Err(err) =>
+                                                UrlDlResult { url, outcome: DlOutcome::corrupted_asset(err.to_string()) }
+                                        }
                                     } else {
                                         UrlDlResult { url, outcome: DlOutcome::unsupported_format(mime.str()) }
                                     }

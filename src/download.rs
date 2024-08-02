@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use http::StatusCode;
 use thiserror::Error;
 
 use crate::media_type::Mime;
@@ -12,12 +13,16 @@ pub enum DlError {
     DownloadFailed,
     #[error("Not found")]
     NotFound,
+    #[error("Rate limiter exceeded")]
+    TooManyRequests,
     /// We probably just need to try againg later
     #[error("Server error")]
     ServerError,
     /// For now we save only images
     #[error("Unsupported format: {0}")]
     UnsupportedFormat(String),
+    #[error("Processing error: {0}")]
+    CorruptedAsset(String),
 }
 
 impl From<reqwest::Error> for DlError {
@@ -26,19 +31,18 @@ impl From<reqwest::Error> for DlError {
     }
 }
 
-const ASSET_MAX_SZIE: u64 = 1024 * 1024 * 100;
-
-pub async fn download(url: &str) -> std::result::Result<(Bytes, Mime), DlError> {
-    // TODO-XXX: should we set timeout?
+pub async fn download(url: &str, file_max_size: u64) -> std::result::Result<(Bytes, Mime), DlError> {
     let Ok(resp) = reqwest::get(url).await else {
         return Err(DlError::NotFound);
     };
-
     if resp.status().is_client_error() {
         return Err(DlError::NotFound);
     }
     if resp.status().is_server_error() {
         return Err(DlError::ServerError);
+    }
+    if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+        return Err(DlError::TooManyRequests);
     }
     if !resp.status().is_success() {
         return Err(DlError::DownloadFailed);
@@ -52,7 +56,7 @@ pub async fn download(url: &str) -> std::result::Result<(Bytes, Mime), DlError> 
     };
 
     if let Some(size) = resp.content_length() {
-        if size > ASSET_MAX_SZIE {
+        if size > file_max_size {
             return Err(DlError::FileTooLarge(size).into());
         }
     }

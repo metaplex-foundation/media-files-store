@@ -38,6 +38,12 @@ pub struct ObjStorage {
     pub bucket_for_media: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct AssetProcessorCfg {
+    pub resize_to: u32,
+    pub file_max_size_bytes: u64,
+}
+
 impl fmt::Debug for ObjStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ObjStorage")
@@ -60,6 +66,7 @@ pub struct Metrics {
 pub struct Settings {
     pub http_server: HttpServer,
     pub obj_storage: ObjStorage,
+    pub asset_processor: AssetProcessorCfg,
     pub das: DasCfg,
     pub env: String,
     pub metrics: Metrics,

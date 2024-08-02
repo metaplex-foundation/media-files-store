@@ -9,8 +9,9 @@ access_key_id = "admin"
 secret_access_key = "password"
 bucket_for_media = "rollup-media-assets"
 
-[images]
+[asset_processor]
 resize_to = 400
+file_max_size_bytes = 10485760 # 100 MB
 
 [das]
 enabled = true

@@ -32,6 +32,8 @@ enum DownloadError {
     SERVER_ERROR = 1;
     NOT_SUPPORTED_FORMAT = 2;
     TOO_LARGE = 3;
+    TOO_MANY_REQUESTS = 4;
+    CORRUPTED_ASSET = 5;
 }
 
 message DownloadResultsRequest {

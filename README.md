@@ -97,7 +97,7 @@ export AWS_SECRET_ACCESS_KEY=password
 export AWS_DEFAULT_REGION=us-east-1
 ```
 
-### Launching the pplication
+### Launching the application
 
 ```sh
 RUN_ENV=my_conf cargo run

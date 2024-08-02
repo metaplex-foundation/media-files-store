@@ -15,8 +15,12 @@ impl App {
         if app_cfg.das.enabled {
             // Rollup NFTs downloader
             let das_client = UtilityChainClient { das_url: app_cfg.das.grpc_address.clone() };
-            asset_processing::start_downloading_pipeline(Arc::new(das_client), media_storag_client.clone(), &app_cfg.das)
-                .await;
+            asset_processing::start_downloading_pipeline(
+                Arc::new(das_client),
+                media_storag_client.clone(),
+                &app_cfg.das,
+                &app_cfg.asset_processor,
+            ).await;
         }
         
         if app_cfg.http_server.enabled {

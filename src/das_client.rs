@@ -78,6 +78,9 @@ impl DlOutcome {
     pub fn unsupported_format(mime: &str) -> DlOutcome {
         DlOutcome::Fail { err: DlError::UnsupportedFormat(mime.to_string()) }
     }
+    pub fn corrupted_asset(details: String) -> DlOutcome {
+        DlOutcome::Fail { err: DlError::CorruptedAsset(details) }
+    }
 }
 
 impl From<DlOutcome> for DlResult {
@@ -99,6 +102,8 @@ impl From<DlError> for DownloadError {
             E::DownloadFailed | E::NotFound => DownloadError::NotFound,
             E::ServerError => DownloadError::ServerError,
             E::UnsupportedFormat(_) => DownloadError::NotSupportedFormat,
+            E::CorruptedAsset(_) => DownloadError::CorruptedAsset,
+            E::TooManyRequests => DownloadError::TooManyRequests,
         }
     }
 }
