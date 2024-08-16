@@ -1,21 +1,8 @@
 use bytes::Bytes;
 use fast_image_resize::{IntoImageView, PixelType, ResizeError};
-use image::{codecs::webp::WebPEncoder, imageops, io::Reader as ImageReader, ImageEncoder, ImageError, ImageFormat};
+use image::{codecs::webp::WebPEncoder, io::Reader as ImageReader, ImageEncoder, ImageError, ImageFormat};
 use thiserror::Error;
 use std::io::Cursor;
-
-// TODO: probably we don't need it, since it's slow, but let's keep for now
-pub fn resize(bytes: &Bytes, width: u32, height: u32) -> Vec<u8> {
-    let img = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format().unwrap()
-        .decode().unwrap();
-
-    let resized = img.resize(width, height, imageops::FilterType::Nearest);
-    
-    let mut result: Vec<u8> = Vec::new();
-    resized.write_to(&mut Cursor::new(&mut result), image::ImageFormat::Jpeg).unwrap();
-    result
-}
 
 #[derive(Error, Debug)]
 pub enum ImgResizeError {

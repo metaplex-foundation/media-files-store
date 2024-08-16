@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{configs::Settings, das_client::UtilityChainClient, http_endpoints, asset_processing, obj_storage_client::MediaStorageClient};
+use crate::{app_metrics, asset_processing, configs::Settings, das_client::UtilityChainClient, http_endpoints, obj_storage_client::MediaStorageClient};
 
 pub struct App {
 }
@@ -23,6 +23,8 @@ impl App {
             ).await;
         }
         
+        app_metrics::run_sys_metrics_collector().await;
+
         if app_cfg.http_server.enabled {
             // Provides downloaded NFT assets via HTTP
             http_endpoints::run_img_server(&app_cfg.http_server, media_storag_client.clone())

@@ -57,11 +57,7 @@ impl fmt::Debug for ObjStorage {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct Metrics {
-    pub enabled: bool,
-}
-
+#[allow(unused)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct Settings {
     pub http_server: HttpServer,
@@ -69,7 +65,6 @@ pub struct Settings {
     pub asset_processor: AssetProcessorCfg,
     pub das: DasCfg,
     pub env: String,
-    pub metrics: Metrics,
 }
 
 impl Settings {

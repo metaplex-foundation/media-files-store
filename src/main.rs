@@ -11,6 +11,7 @@ mod download;
 mod http_endpoints;
 mod string_util;
 mod image_resize;
+mod app_metrics;
 
 use tracing::info;
 use tracing_subscriber;
