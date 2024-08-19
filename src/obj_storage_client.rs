@@ -1,6 +1,7 @@
 
 use aws_config::Region;
 use aws_sdk_s3::{config::Credentials, primitives::ByteStream};
+use tokio::time::Instant;
 
 use crate::configs::ObjStorage;
 
@@ -48,10 +49,12 @@ impl MediaStorageClient {
     }
 
     async fn get(&self, key: &str) -> anyhow::Result<StoredData> {
+        let start = Instant::now();
         let resp = self.s3_client.get_object()
             .bucket(&self.media_bucket)
             .key(key)
             .send().await?;
+        metrics::histogram!("storage", "operation" => "get_object").record(start.elapsed().as_secs_f64());
 
         let mime = resp.content_type.unwrap_or("application/octet-stream".to_string());
         let bytes = resp.body;
@@ -66,6 +69,7 @@ impl MediaStorageClient {
     }
 
     async fn save(&self, key: &str, byte_stream: ByteStream, content_type: &str) -> anyhow::Result<()> {
+        let start = Instant::now();
         let _resp = self.s3_client.put_object()
             .bucket(&self.media_bucket)
             .key(key)
@@ -73,7 +77,7 @@ impl MediaStorageClient {
             .body(byte_stream)
             .send()
             .await?;
-
+        metrics::histogram!("storage", "operation" => "put_object").record(start.elapsed().as_secs_f64());
         Ok(())
     }
 
@@ -81,17 +85,4 @@ impl MediaStorageClient {
 
 fn key_for_size(asset_id: &str) -> String {
     format!("media/{}", asset_id)
-}
-
-#[tokio::test]
-async fn test_minio() {
-    let config = aws_config::load_from_env().await;
-    let s3_client = aws_sdk_s3::Client::new(&config);
-
-    let resp = s3_client.create_bucket()
-        .bucket("myfiles")
-        .send()
-        .await;
-
-    println!("{resp:?}");
 }

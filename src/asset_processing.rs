@@ -83,7 +83,7 @@ async fn make_results_sender(das_client: Arc<dyn DasClient + Send + Sync + 'stat
 
                     if buffer.len() >= SEND_BACK_BUFFER_SIZE {
                         let latency = start.elapsed().as_secs_f64();
-                        metrics::gauge!("processing_rate").set(latency / SEND_BACK_BUFFER_SIZE as f64);
+                        metrics::gauge!("flow_rate").set(latency / SEND_BACK_BUFFER_SIZE as f64);
                         start = Instant::now();
 
                         das_client.notify_finished(buffer).await;
@@ -155,8 +155,7 @@ async fn make_worker(
             },
         };
 
-        metrics::counter!("processing_total_time").increment(start.elapsed().as_millis() as u64);
-        metrics::counter!("processing_total_count").increment(1);
+        metrics::histogram!("asset_processing").record(start.elapsed().as_secs_f64());
 
         asset_download_result
     }
