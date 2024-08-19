@@ -1,12 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, future::ready, sync::Arc};
 
 use axum::{
     body::Body, extract::{Path, Query, State}, http::StatusCode, response::{IntoResponse, Response}, routing::get, Router
 };
 use http::header::CONTENT_TYPE;
+use tokio::time::Instant;
 use tokio_util::io::ReaderStream;
 
 use crate::{configs::HttpServer, image_resize::{self, ImgResizeError}, obj_storage_client::{MediaStorageClient, StoredData}};
+use crate::app_metrics::setup_metrics_recorder;
 
 const IMG_MAX_SIZE: u32 = 400;
 
@@ -17,12 +19,14 @@ struct EndpointSharedData {
 
 /// Creates an HTTP server that provides asset previews to clients
 pub async fn run_img_server(cfg: &HttpServer, media_storage_client: Arc<MediaStorageClient>) -> anyhow::Result<()> {
+    let recorder_handle = setup_metrics_recorder();
 
     let state = EndpointSharedData { media_storage_client };
 
     let app = Router::new()
         .route("/", get(root))
-        .route("/asset/:id", get(get_asset))
+        .route("/preview/:id", get(get_asset))
+        .route("/metrics", get(move || { ready(recorder_handle.render())}))
         .with_state(state);
 
     let port = cfg.port;
@@ -52,7 +56,13 @@ async fn get_asset(
         .and_then(|s|s.parse::<u32>().ok())
         .filter(|&s| s < IMG_MAX_SIZE);
 
-    match state.media_storage_client.get_media(&id).await {
+    let start = Instant::now();
+
+    let prview = state.media_storage_client.get_media(&id).await;
+    metrics::counter!("storage_reads_total_time").increment(start.elapsed().as_millis() as u64);
+    metrics::counter!("storage_reads_number").increment(1);
+
+    let response = match prview {
         Ok(StoredData {mime, bytes: byte_stream}) => {
             match size_op {
                 Some(size) => {
@@ -70,7 +80,11 @@ async fn get_asset(
             }
         },
         Err(_) => Err(StatusCode::NOT_FOUND),
-    }
+    };
+    metrics::counter!("get_preview_requests_total_time").increment(start.elapsed().as_millis() as u64);
+    metrics::counter!("get_preview_requests_number").increment(1);
+
+    response
 }
 
 struct Resp(String, Body);

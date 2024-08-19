@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::time::Instant;
+
 use crate::{
     configs::{AssetProcessorCfg, DasCfg},
     das_client::{DasClient, DlOutcome, UrlDlResult},
@@ -66,7 +68,6 @@ async fn make_poller(
                 task_sender.send(Task::Download { url: asset })
                     .await.unwrap();
             }
-            // TODO: metrics here
         }
     });
 }
@@ -74,11 +75,17 @@ async fn make_poller(
 async fn make_results_sender(das_client: Arc<dyn DasClient + Send + Sync + 'static>, mut resp_recv: tokio::sync::mpsc::Receiver<TaskResp>) {
     tokio::spawn(async move {
         let mut buffer: Vec<UrlDlResult> = Vec::new(); // NFT Id -> mime type
+        let mut start = Instant::now();
         loop {
             match resp_recv.recv().await {
                 Some(TaskResp(asset_download_result)) => {
                     buffer.push(asset_download_result);
+
                     if buffer.len() >= SEND_BACK_BUFFER_SIZE {
+                        let latency = start.elapsed().as_secs_f64();
+                        metrics::gauge!("flow_rate").set(latency / SEND_BACK_BUFFER_SIZE as f64);
+                        start = Instant::now();
+
                         das_client.notify_finished(buffer).await;
                         buffer = Vec::new();
                     }
@@ -99,35 +106,13 @@ async fn make_worker(
     asset_cfg: AssetProcessorCfg,
 ) {
     tokio::spawn(async move {
+        metrics::gauge!("workers_count").increment(1);
         loop {
             match requests.recv().await {
                 Ok(msg) => {
                     match msg {
                         Task::Download { url} => {
-                            let id = keccak256_hash_bs58str(&url);
-                            let asset_download_result = match download(&url, asset_cfg.file_max_size_bytes).await {
-                                Ok((bytes, mime)) => {
-                                    if mime.class == AssetClass::Image {
-                                        match image_resize::resize_fast(&bytes, asset_cfg.resize_to) {
-                                            Ok(resized) => {
-                                                media_storage.save_media(&id, resized.into(),mime.str()).await.unwrap();
-                                                UrlDlResult { url, outcome: DlOutcome::success(mime.str(), asset_cfg.resize_to) }
-                                            },
-                                            Err(ImgResizeError::NoResizeNeeded) => {
-                                                media_storage.save_media(&id, bytes.into(),mime.str()).await.unwrap();
-                                                UrlDlResult { url, outcome: DlOutcome::success(mime.str(), asset_cfg.resize_to) }       
-                                            },
-                                            Err(err) =>
-                                                UrlDlResult { url, outcome: DlOutcome::corrupted_asset(err.to_string()) }
-                                        }
-                                    } else {
-                                        UrlDlResult { url, outcome: DlOutcome::unsupported_format(mime.str()) }
-                                    }
-                                } ,
-                                Err(err) => {
-                                    UrlDlResult { url, outcome: err.into() }
-                                },
-                            };
+                            let asset_download_result = process_url(url, &media_storage, &asset_cfg).await;
                             match responses.send(TaskResp(asset_download_result)).await {
                                 Ok(_) => (),
                                 Err(_) => break,
@@ -138,7 +123,40 @@ async fn make_worker(
                 },
                 Err(_) => break,
             }
-            // TODO: metric here
         }
+        metrics::gauge!("workers_count").decrement(1);
     });
+
+    async fn process_url(url: String, media_storage: &MediaStorageClient, asset_cfg: &AssetProcessorCfg) -> UrlDlResult {
+        let start = Instant::now();
+
+        let id = keccak256_hash_bs58str(&url);
+        let asset_download_result = match download(&url, asset_cfg.file_max_size_bytes).await {
+            Ok((bytes, mime)) => {
+                if mime.class == AssetClass::Image {
+                    match image_resize::resize_fast(&bytes, asset_cfg.resize_to) {
+                        Ok(resized) => {
+                            media_storage.save_media(&id, resized.into(),mime.str()).await.unwrap();
+                            UrlDlResult { url, outcome: DlOutcome::success(mime.str(), asset_cfg.resize_to) }
+                        },
+                        Err(ImgResizeError::NoResizeNeeded) => {
+                            media_storage.save_media(&id, bytes.into(),mime.str()).await.unwrap();
+                            UrlDlResult { url, outcome: DlOutcome::success(mime.str(), asset_cfg.resize_to) }       
+                        },
+                        Err(err) =>
+                            UrlDlResult { url, outcome: DlOutcome::corrupted_asset(err.to_string()) }
+                    }
+                } else {
+                    UrlDlResult { url, outcome: DlOutcome::unsupported_format(mime.str()) }
+                }
+            } ,
+            Err(err) => {
+                UrlDlResult { url, outcome: err.into() }
+            },
+        };
+
+        metrics::histogram!("asset_processing").record(start.elapsed().as_secs_f64());
+
+        asset_download_result
+    }
 }
